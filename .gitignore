@@ -1,0 +1,8 @@
+.*.swo
+.*.swp
+/.direnv
+/target
+result
+result-*
+/configs/*
+!/configs/.gitkeep

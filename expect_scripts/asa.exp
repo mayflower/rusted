@@ -1,0 +1,40 @@
+#!/usr/bin/env expect
+
+set timeout 30
+
+lassign $argv user passfile host kexalg cipher keyalg promptname
+
+# read password from file and trim possible newline at the end
+set pass [string trimright [read [open "$passfile"]] "\n"]
+
+log_user 0
+
+spawn ssh "$user@$host" \
+  -o PubkeyAuthentication=no \
+  -o PasswordAuthentication=yes \
+  -o "KexAlgorithms=$kexalg" \
+  -c "$cipher" \
+  -o "HostKeyAlgorithms=$keyalg"
+
+expect "$user@$host's password:"
+send "$pass\r"
+
+expect "$promptname>"
+send "enable\r"
+expect "Password:"
+send "$pass\r"
+
+expect "$promptname#"
+send -- "show running-config\r"
+log_user 1
+
+expect {
+  "<--- More --->" {
+    send " "
+    exp_continue
+  }
+  "$promptname#" {
+    log_user 0
+    send "exit\r"
+  }
+}

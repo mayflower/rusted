@@ -1,0 +1,9 @@
+[Unit]
+Description=timer for the rusted config backup service
+
+[Timer]
+OnStartupSec=1m
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target

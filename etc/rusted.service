@@ -1,0 +1,25 @@
+[Unit]
+Description=rusted config backup service
+Requires=network-online.target
+After=network-online.target
+
+[Service]
+Group=rusted
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectProc=invisible
+Restart=always
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+StateDirectory="rusted"
+StateDirectoryMode=0750
+UMask=0027
+User=rusted
+WorkingDirectory=%S/rusted
+
+# ExecStart=/path/to/rusted --devices /path/to/rusted.json --expect-scripts-dir /path/to/expect_scripts --state-dir %S/rusted/configs
