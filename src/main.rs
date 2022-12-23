@@ -1,6 +1,6 @@
 mod devices;
 
-use anyhow::{Context, Error, Result};
+use anyhow::{anyhow, bail, Context, Error, Result};
 use clap::Parser;
 use core::str::from_utf8;
 use devices::DeviceConfig;
@@ -12,21 +12,32 @@ use tokio::runtime::Runtime;
 use tracing::{debug, error, info};
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
+/// rusted config, command line parameter parsing is done using `clap_derive`
 #[derive(Parser, Debug)]
 struct Config {
+    /// directory that contains expect scripts for each device model
     #[clap(short, long, default_value = "expect_scripts")]
     expect_scripts_dir: String,
+    /// definition of all devices in JSON format
     #[clap(long, default_value = "rusted.json")]
     devices: String,
+    /// location of the git repository containing the fetched device configurations
     #[clap(long, default_value = "configs")]
     state_dir: String,
+    /// disable pushing to the default remote repository after committing
+    #[clap(long)]
+    no_push: bool,
 }
 
+/// initializes the tracing subscriber, sets the default log level to `INFO`.
+/// this default configuration may the be overridden using the `RUST_LOG` environment variable.
+/// (e.g. `RUST_LOG=debug` or `RUST_LOG=rusted=debug`)
 fn init_tracing() -> Result<()> {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env()?;
 
+    // format for use with journald
     let tracing_subscriber = tracing_subscriber::fmt()
         .with_writer(stderr)
         .without_time()
@@ -38,60 +49,93 @@ fn init_tracing() -> Result<()> {
         .context("failed to set global default tracing subscriber")
 }
 
+///
 async fn update_device_config_file(
     device_nr: usize,
     device: DeviceConfig,
     expect_scripts_dir: String,
     state_dir: String,
 ) -> Result<()> {
+    // construct path to config dump file for this device
     let dump_file = device.to_config_dump_path(&state_dir);
-    let _ = Path::new(&state_dir).try_exists()?;
+
+    // check if `state_dir` actually exists
+    if !Path::new(&state_dir).try_exists()? {
+        bail!("state_dir {state_dir} does not exist");
+    }
 
     info!("Device {device_nr}: fetching running-config");
+    // consume device to acquire its filtered config dump
     let dump = device.into_filtered_dump(&expect_scripts_dir).await?;
 
     info!("Device {device_nr}: writing running-config to '{dump_file}'");
+    // write filtered config dump to previously constructed file location
     write(dump_file, dump.as_bytes()).map_err(Error::msg)
 }
 
-fn commit_and_push(state_dir: &str) -> Result<()> {
-    let cmd = Command::new("git")
-        .arg("ls-files")
-        .arg("--modified")
-        .arg("--others")
-        .arg("--exclude-standard")
-        .current_dir(state_dir)
+/// invokes `git` with the specified `subcmd` and further `args` in `workdir`
+/// `with_output` controls whether or not the result contains Some(stdout) of the
+/// invoked command or None
+fn git_subcommand(
+    subcmd: &str,
+    workdir: &str,
+    args: &[&str],
+    with_output: bool,
+) -> Result<Option<String>> {
+    let child = Command::new("git")
+        .arg(subcmd)
+        .args(args)
+        .current_dir(workdir)
         .stdout(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("git command failed")?;
 
-    let stdout_bytes = cmd.wait_with_output()?.stdout;
-
-    let stdout_str = from_utf8(&stdout_bytes)?;
-
-    for file in stdout_str.lines() {
-        info!("commiting changes to file '{state_dir}/{file}'");
-
-        Command::new("git")
-            .arg("add")
-            .arg(file)
-            .current_dir(state_dir)
-            .spawn()?
-            .wait()?;
-
-        Command::new("git")
-            .arg("commit")
-            .arg("--message")
-            .arg(format!("Update {file}"))
-            .current_dir(state_dir)
-            .spawn()?
-            .wait()?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        bail!(
+            "git ls-files failed:\nstderr:\n{}\nstdout:\n{}",
+            from_utf8(&output.stderr).unwrap_or("<invalid utf8>"),
+            from_utf8(&output.stdout).unwrap_or("<invalid utf8>")
+        )
     }
 
-    Command::new("git")
-        .arg("push")
-        .current_dir(state_dir)
-        .spawn()?
-        .wait()?;
+    if with_output {
+        let stdout_str = from_utf8(&output.stdout)?;
+        Ok(Some(stdout_str.to_owned()))
+    } else {
+        Ok(None)
+    }
+}
+
+/// iterates over all modified and added files in `state_dir`,
+/// then creates one commit per file and optionally pushes changes
+/// to the default remote for the current branch
+fn update_git_repo(state_dir: &str, no_push: bool) -> Result<()> {
+    let changed_files = git_subcommand(
+        "ls-files",
+        state_dir,
+        vec!["--modified", "--others", "--exclude-standard"].as_ref(),
+        true,
+    )
+    .context("failed to list changed files")?
+    .ok_or(anyhow!("this should never happen"))?;
+
+    for file in changed_files.lines() {
+        info!("commiting changes to file '{state_dir}/{file}'");
+
+        git_subcommand("add", state_dir, vec![file].as_ref(), false)?;
+        git_subcommand(
+            "commit",
+            state_dir,
+            vec!["--message", format!("Update {file}").as_ref()].as_ref(),
+            false,
+        )?;
+    }
+
+    if !no_push {
+        git_subcommand("push", state_dir, &[], false)?;
+    }
 
     Ok(())
 }
@@ -109,18 +153,42 @@ fn main() -> Result<()> {
     let rt = Runtime::new()?;
 
     let mut tasks = vec![];
+    // spawns a task on the runtime `rt` for each configured device.
+    // an index is assigned to each task to identify async log output
     for (i, device) in devices.into_iter().enumerate() {
         let scripts_dir = config.expect_scripts_dir.clone();
         let state_dir = config.state_dir.clone();
 
         tasks.push(rt.spawn(async move {
-            if let Err(e) = update_device_config_file(i + 1, device, scripts_dir, state_dir).await {
-                error!("Device {i}: {e:#}");
-            }
+            let idx = i + 1; // devices start at 1 :)
+            update_device_config_file(idx, device, scripts_dir, state_dir)
+                .await
+                .map_err(|e| {
+                    // log error when it occurs
+                    error!("Device {i}: {e:#}");
+                    e
+                })
         }));
     }
 
-    rt.block_on(async { futures::future::join_all(tasks).await });
+    let tasks_failed: bool = rt
+        .block_on(async { futures::future::join_all(tasks).await })
+        .iter()
+        .any(|res| match res {
+            Ok(Err(_)) => true, // contained error was already logged above
+            Err(e) => {
+                error!("async task failed: {e}");
+                true
+            }
+            _ => false,
+        });
 
-    commit_and_push(&config.state_dir)
+    update_git_repo(&config.state_dir, config.no_push)?;
+
+    // TODO maybe exit before updating the git repo if any task failed?
+    if tasks_failed {
+        bail!("not all tasks succeeded")
+    }
+
+    Ok(())
 }
