@@ -7,8 +7,8 @@ lassign $argv user passfile host kexalg cipher keyalg
 # read password from file and trim potential newline at the end
 set pass [string trimright [read [open "$passfile"]] "\n"]
 
-set parts [split host "."]
-set hostname [lindex parts 0]
+set parts [split "$host" "."]
+set hostname [lindex "$parts" 0]
 
 log_user 0
 
