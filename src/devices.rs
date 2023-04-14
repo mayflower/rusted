@@ -57,8 +57,13 @@ impl DeviceConfig {
     pub fn read_all_from_file(config_path: &str) -> Result<Vec<Self>> {
         let config_json = read_to_string(config_path)?;
 
-        let configs: Vec<DeviceConfig> = serde_json::from_str(&config_json)
-            .with_context(|| format!("failed to deserialize JSON from '{config_path}'"))?;
+        Self::parse_from_json_str(&config_json)
+            .with_context(|| format!("failed to deserialize JSON from '{config_path}'"))
+    }
+
+    pub fn parse_from_json_str(json_str: &str) -> Result<Vec<Self>> {
+        let configs: Vec<DeviceConfig> =
+            serde_json::from_str(json_str).context("failed to deserialize JSON")?;
 
         Ok(configs)
     }
@@ -188,4 +193,15 @@ impl DeviceConfig {
             .chain(self.extra_expect_params)
             .collect()
     }
+}
+
+#[test]
+fn parse_empty_device_list_to_empty_vec() {
+    use crate::devices::DeviceConfig;
+    use serde_json::json;
+
+    let empty_config = json!([]).to_string();
+    let parsed_vec = DeviceConfig::parse_from_json_str(&empty_config).unwrap();
+
+    assert_eq!(0, parsed_vec.len())
 }
