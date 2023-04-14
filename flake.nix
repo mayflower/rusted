@@ -80,6 +80,7 @@
             rustc
             rustfmt
             expect
+            rust-analyzer
           ];
           RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
         };
