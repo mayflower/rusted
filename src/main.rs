@@ -119,7 +119,7 @@ fn update_git_repo(state_dir: &str, no_push: bool) -> Result<()> {
         true,
     )
     .context("failed to list changed files")?
-    .ok_or(anyhow!("this should never happen"))?;
+    .ok_or_else(|| anyhow!("this should never happen"))?;
 
     for file in changed_files.lines() {
         info!("commiting changes to file '{state_dir}/{file}'");
