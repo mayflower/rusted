@@ -165,7 +165,7 @@ fn main() -> Result<()> {
                 .await
                 .map_err(|e| {
                     // log error when it occurs
-                    error!("Device {i}: {e:#}");
+                    error!("Device {idx}: {e:#}");
                     e
                 })
         }));
