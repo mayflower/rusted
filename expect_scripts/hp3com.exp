@@ -1,0 +1,43 @@
+#!/usr/bin/env expect
+
+set timeout 30
+
+lassign $argv user passfile host kexalg cipher keyalg cli_passfile
+
+# read password from file and trim potential newline at the end
+set pass [string trimright [read [open "$passfile"]] "\n"]
+set cli_pass [string trimright [read [open "$cli_passfile"]] "\n"]
+
+set parts [split "$host" "."]
+set hostname [lindex "$parts" 0]
+
+log_user 0
+
+spawn -nottyinit -nottycopy ssh "$user@$host" \
+  -o PubkeyAuthentication=no \
+  -o PasswordAuthentication=yes \
+  -o "KexAlgorithms=$kexalg" \
+  -c "$cipher" \
+  -o "HostKeyAlgorithms=$keyalg"
+
+expect "$user@$host's password:"
+send "$pass\n"
+
+expect "<$hostname>"
+send "_cmdline-mode on\n"
+
+expect "All commands can be displayed and executed"
+send "Y\n"
+
+expect "Please input password"
+send -- "$cli_pass\n"
+
+expect "<$hostname>"
+send "screen-length disable\n"
+
+expect "<$hostname>"
+send "display current-configuration\n"
+log_user 1
+
+expect "<$hostname>"
+send "quit\n"
