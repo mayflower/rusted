@@ -155,7 +155,7 @@ impl DeviceConfig {
                 // replace patterns from `replacement_patterns`
                 .map(|line| {
                     let mut line = line.to_owned();
-                    for &(ref regex, ref replacement) in &replacements {
+                    for (regex, replacement) in &replacements {
                         line = regex.replace_all(&line, replacement).to_string();
                     }
                     line

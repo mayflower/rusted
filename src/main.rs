@@ -49,7 +49,6 @@ fn init_tracing() -> Result<()> {
         .context("failed to set global default tracing subscriber")
 }
 
-///
 async fn update_device_config_file(
     device_nr: usize,
     device: DeviceConfig,
